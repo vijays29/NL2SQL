@@ -1,1 +1,7 @@
-fastapi==0.115.6
+fastapi
+uvicorn
+google-generativeai
+mysql-connector-python
+langchain
+langchain-google-genai
+langchain-core
