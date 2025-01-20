@@ -1,7 +1,7 @@
 fastapi
-uvicorn
-google-generativeai
+pydantic
+python-dotenv
 mysql-connector-python
 langchain
-langchain-google-genai
-langchain-core
+langchain_google_genai
+google-generativeai

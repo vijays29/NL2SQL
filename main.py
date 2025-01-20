@@ -1,32 +1,43 @@
-from fastapi import FastAPI, HTTPException
-from nl2sqlnew import nl_to_sql, db_connection
-from fastapi.responses import JSONResponse
 import json
+from fastapi import FastAPI,HTTPException
+from nl2sql import nl_to_sql
+from database import db_connection
+from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+app=FastAPI()
 
-app = FastAPI()
+class QueryRequest(BaseModel):
+    nl_query:str
 
+@app.post("/nlquery/")
+async def handle_req(request:QueryRequest):
 
-@app.get("/{nl_query}")
-async def handle_req(nl_query: str):
-    natural_language_query = nl_query
-    sql_statement = nl_to_sql(natural_language_query)
-    output = {}
-
-    if sql_statement:
-        output["generated_sql"] = sql_statement
-        json_output = db_connection(sql_statement)
-        if json_output:
-            try:
-               output["query_results"] = json.loads(json_output)
-            except json.JSONDecodeError:
-                raise HTTPException(
-                   status_code=500, detail="Failed to decode database result to JSON"
-                    )
-
-        else:
-            output["query_results"] = "Failed to retrieve data from the database."
-
+    output={}
+    nlquery=request.nl_query.lower()
+    if not nlquery.strip():
+        raise HTTPException(status_code=400,detail="Please Enter valid nlquery")
     else:
-       raise HTTPException(status_code=400, detail="Failed to generate SQL.")
-       
-    return JSONResponse(content=output)
+        forbidden_keywords = ["drop", "delete","modify","alter"]
+        if any(keyword in nlquery for keyword in forbidden_keywords):
+            raise HTTPException(status_code=400,detail="Failed to generate SQL.")
+        else:
+            sql_statement=nl_to_sql(nlquery)
+            if sql_statement:
+
+                sql_query=db_connection(sql_statement)
+
+                if sql_query:
+
+                    try:
+                        jsonconvert=json.dumps(sql_query,indent=2)
+                        output["query_results"]=json.loads(jsonconvert)
+                    except json.JSONDecoder:
+                        raise HTTPException(
+                        status_code=500,details="Failed to decode database result to JSON"
+                        )
+                else:
+                    output["query_results"]="Failed to retrieve data from the database."
+            else:
+                raise HTTPException(status_code=400,detail="Failed to generate SQL.")
+    
+            return JSONResponse(content=output)
