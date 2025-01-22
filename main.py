@@ -1,13 +1,25 @@
 import json
 from fastapi import FastAPI,HTTPException
 from nl2sql import nl_to_sql
-from database import db_connection
+from database import db_connection, connect_db
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
+
+connect_db()
 app=FastAPI()
 
 class QueryRequest(BaseModel):
     nl_query:str
+
+@app.post("/gen_query")
+async def gen_query(request: QueryRequest):
+
+    if request.nl_query.strip() == "" or request.nl_query is None:
+        return HTTPException(403, "Missing Query")
+
+    return JSONResponse(content={
+    "query":   nl_to_sql(request.nl_query)
+    })
 
 @app.post("/nlquery/")
 async def handle_req(request:QueryRequest):
@@ -22,6 +34,7 @@ async def handle_req(request:QueryRequest):
             raise HTTPException(status_code=400,detail="Failed to generate SQL.")
         else:
             sql_statement=nl_to_sql(nlquery)
+            
             if sql_statement:
 
                 sql_query=db_connection(sql_statement)

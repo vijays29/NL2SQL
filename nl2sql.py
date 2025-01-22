@@ -5,6 +5,8 @@ from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.runnables import RunnablePassthrough,RunnableLambda
 
+from database import fetch_schema_details
+
 #store the api key in env for security.
 load_dotenv()
 API_KEY=os.getenv("API_KEY")
@@ -13,12 +15,10 @@ aimodel.configure(api_key=API_KEY)
 def nl_to_sql(nl_query):
         #The prompt contains the natural language processing query
         #The prompt template contains the entire query no need to type the entire prompt
-        prompt_template = """
+        prompt_template = f"""
         Convert the following natural language query into a SQL SELECT statement suitable for a database with the following table structure:
 
-        student table: roll_number INT PRIMARY KEY, sname VARCHAR(30), dept VARCHAR(5), sem INT
-        exam table: regno INT PRIMARY KEY, rollno_number INT, dept VARCHAR(5), score INT, FOREIGN KEY (student_id) REFERENCES student(student_id)
-        placement table: placement_id INT PRIMARY KEY, student_id INT, company_name VARCHAR(100), placement_date DATE, FOREIGN KEY (student_id) REFERENCES student(student_id)
+        {'\n'.join(fetch_schema_details())}
 
         The database tables to query are student, exam, and placement.
 
