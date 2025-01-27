@@ -1,56 +1,64 @@
 import json
 from fastapi import FastAPI,HTTPException
-from nl2sql import nl_to_sql
-from database import db_connection, connect_db
+from nl2sql import convert_natural_language_to_sql
+from database import db_connection
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 
-connect_db()
 app=FastAPI()
 
-class QueryRequest(BaseModel):
-    nl_query:str
+class DataQueryRequest(BaseModel):
 
-@app.post("/gen_query")
-async def gen_query(request: QueryRequest):
+    """
+    Represents the request body for the /data-requests/ endpoint.
 
-    if request.nl_query.strip() == "" or request.nl_query is None:
-        return HTTPException(403, "Missing Query")
+    Attributes:
+        user_query (str): The natural language query to be converted to SQL.
+    """
 
-    return JSONResponse(content={
-    "query":   nl_to_sql(request.nl_query)
-    })
+    user_query:str
 
-@app.post("/nlquery/")
-async def handle_req(request:QueryRequest):
+@app.post("/data-requests")
+
+async def data_requester(request:DataQueryRequest):
+
+    """
+    Handles the request to convert a natural language query to SQL and retrieve data.
+
+    Args:
+        request (DataQueryRequest): The request object containing the natural language query.
+
+    Returns:
+        JSONResponse: A JSON response containing the query results or an error message.
+
+    Raises:
+        HTTPException:
+            - 400: If the input query is invalid (empty or contains forbidden keywords) or if the SQL generation fails.
+            - 500: If there is an error decoding the database result to JSON.
+    """
 
     output={}
-    nlquery=request.nl_query.lower()
-    if not nlquery.strip():
-        raise HTTPException(status_code=400,detail="Please Enter valid nlquery")
-    else:
-        forbidden_keywords = ["drop", "delete","modify","alter"]
-        if any(keyword in nlquery for keyword in forbidden_keywords):
-            raise HTTPException(status_code=400,detail="Failed to generate SQL.")
-        else:
-            sql_statement=nl_to_sql(nlquery)
-            
-            if sql_statement:
-
-                sql_query=db_connection(sql_statement)
-
-                if sql_query:
-
-                    try:
-                        jsonconvert=json.dumps(sql_query,indent=2)
-                        output["query_results"]=json.loads(jsonconvert)
-                    except json.JSONDecoder:
-                        raise HTTPException(
-                        status_code=500,details="Failed to decode database result to JSON"
-                        )
-                else:
-                    output["query_results"]="Failed to retrieve data from the database."
-            else:
-                raise HTTPException(status_code=400,detail="Failed to generate SQL.")
+    user_nl_query=request.user_query.lower().strip()
+    forbidden_keywords = ["drop", "delete","modify","alter"]
+    if not user_nl_query.strip():
+        raise HTTPException(status_code=400,detail="Please Enter valid user_nl_query")
     
-            return JSONResponse(content=output)
+    if any(keyword in user_nl_query for keyword in forbidden_keywords):
+        raise HTTPException(status_code=400,detail="Failed to generate SQL.123")
+    
+    gen_sql_query=convert_natural_language_to_sql(user_nl_query)
+    print (gen_sql_query)     
+    if gen_sql_query:
+        json_data_convert=db_connection(gen_sql_query)
+        if json_data_convert:
+            try:
+                json_data=json.dumps(json_data_convert,indent=2)
+                output["Table_result"]=json.loads(json_data)
+            except json.JSONDecoder:
+                raise HTTPException(status_code=500,details="Failed to decode database result to JSON")
+        else:
+            raise HTTPException(status_code=400,detail=f"{user_nl_query} : Such data not available in the table.")
+    else:
+        raise HTTPException(status_code=400,detail="Failed to generate SQL.Please provide valid details.check details like column names,table name")
+    
+    return JSONResponse(content=output)
