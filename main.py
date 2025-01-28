@@ -1,10 +1,13 @@
 import json
 from pydantic import BaseModel
-from database import db_connection
+from src.database import db_output_gen
 from fastapi import FastAPI,HTTPException
-from nl2sql import convert_natural_language_to_sql
+from src.nl2sql import convert_natural_language_to_sql
 from fastapi.responses import JSONResponse
-from words import forbidden_keywords
+from src.words import forbidden_keywords
+from src.config import get_db_config
+from src.fetch_details_scehma import QueryRequest,fetch_table_details
+get_db_config()
 
 ''' FastApi Application instance '''
 app=FastAPI(title="NL2SQL API",
@@ -29,8 +32,34 @@ class DataQueryRequest(BaseModel):
     
     This class ensures that incoming data is structured correctly for processing.
     """
-
     user_query:str
+
+
+@app.post("/details",response_model=dict, summary="Fetch Table Details", tags=["Database"])
+async def fetch(req:QueryRequest):
+    """
+    Fetches fetch_table_details names and their column details from the database. 
+
+    Request Body:
+    - query (str): The SQL query to retrieve fetch_table_details names. (Only 'SHOW TABLES' queries are allowed.)
+
+    Responses:
+    - Returns a dictionary containing fetch_table_details names and their columns.
+    - If the query is empty or invalid.
+    - If a database error occurs.
+    """
+    user_req_table=req.get_table.strip().lower()
+    if not user_req_table:
+        raise HTTPException(status_code=400,detail="Query cannot be empty")
+    
+    if user_req_table =="show tables":
+        result = fetch_table_details(user_req_table)
+        return JSONResponse(content=result, status_code=200)
+    
+    raise HTTPException(status_code=400,detail={"Please follow the format : ' show tables ' your entered wrong format" : user_req_table})
+    
+
+
 
 @app.post("/data-requests",summary="Convert Natural Language Query to SQL",
     description="This endpoint takes a natural language query and converts it to a corresponding SQL query. The SQL query is then executed against the database, and the results are returned in a JSON format. If the query is invalid or contains forbidden keywords, an error is returned.",
@@ -45,7 +74,7 @@ async def data_requester(request:DataQueryRequest):
         request (DataQueryRequest): The request object containing the natural language query.
     
     This function does the following:
-    - Validates the user input.
+    - Validates the user_req_table input.
     - Converts the natural language query to a corresponding SQL query.
     - Executes the SQL query against the database.
     - Returns the results or an error message in JSON format.
@@ -72,7 +101,7 @@ async def data_requester(request:DataQueryRequest):
         raise HTTPException(status_code=400,detail="Failed to generate SQL Query.")
 
     try:
-        query_result=db_connection(generated_sql)
+        query_result=db_output_gen(generated_sql)
         if query_result:
             return JSONResponse(content={"Table_result":query_result},status_code=200)
         else:

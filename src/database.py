@@ -1,16 +1,8 @@
-import os
-from dotenv import load_dotenv
 import mysql.connector
 from fastapi import HTTPException
+from src.config import get_db_config
 
-#load environment variables
-load_dotenv()
-hostName=os.getenv('HOST_NAME')
-userName=os.getenv('USER_NAME')
-password=os.getenv('PASSWORD')
-dataBaseName=os.getenv('DATABASE_NAME')
-
-def db_connection(generated_sql:str,params=None) -> list[dict] | None:
+def db_output_gen(generated_sql:str,params=None) -> list[dict] | None:
 
     """
     Establishes a connection to the MySQL database and executes the given SQL statement.
@@ -25,9 +17,11 @@ def db_connection(generated_sql:str,params=None) -> list[dict] | None:
                     Returns a dictionary with an "error" key if an error occurs during database connection or query execution.
     """
     connection=None
+    
     try:
-        connection=mysql.connector.connect(host=hostName,user=userName,
-                                    password=password,database=dataBaseName)
+        con=get_db_config()
+        connection=mysql.connector.connect(host=con["host"],user=con["user"],
+                                    password=con["password"],database=con["database"])
         mycursor=connection.cursor()
         mycursor.execute(generated_sql)
         results=mycursor.fetchall()

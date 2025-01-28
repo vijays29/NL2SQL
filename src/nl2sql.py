@@ -5,14 +5,14 @@ from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.runnables import RunnablePassthrough,RunnableLambda
 from fastapi import HTTPException
-from words import forbidden_keywords
-from config import fetch_data
+from src.words import forbidden_keywords
+from src.config import metadata
 
 #Load Environment variables
 load_dotenv()
 API_KEY=os.getenv('API_KEY')
 #Load database Configuration
-FETCH_SCHEMA_DETAILS=fetch_data
+FETCH_SCHEMA_DETAILS=metadata()
 aimodel.configure(api_key=API_KEY)
 
 def convert_natural_language_to_sql(user_query:str,params = None) -> str | None:
