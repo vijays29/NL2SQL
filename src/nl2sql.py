@@ -5,7 +5,7 @@ from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.runnables import RunnablePassthrough,RunnableLambda
 from fastapi import HTTPException
-from src.words import forbidden_keywords
+from src.words import contains_forbidden_keywords
 from src.config import metadata
 
 #Load Environment variables
@@ -28,8 +28,8 @@ def convert_natural_language_to_sql(user_query:str,params = None) -> str | None:
                  Returns "ERROR" if the LLM identifies a potentially harmful request to modify data or if there is an error in constructing the SQL query.
         """
 
-        if any(keyword in user_query for keyword in forbidden_keywords):
-              return None
+        if contains_forbidden_keywords(user_query):  # Use the regex check to filter forbidden queries
+            return None  # Reject the query if any forbidden keyword is found
 
         prompt_template = f"""
 

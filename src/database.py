@@ -23,7 +23,7 @@ def db_output_gen(generated_sql:str,params=None) -> list[dict] | None:
         connection=mysql.connector.connect(host=con["host"],user=con["user"],
                                     password=con["password"],database=con["database"])
         mycursor=connection.cursor()
-        mycursor.execute(generated_sql)
+        mycursor.execute(generated_sql,params=None)
         results=mycursor.fetchall()
 
         if not results:
