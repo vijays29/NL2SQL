@@ -95,6 +95,7 @@ async def data_requester(request:DataQueryRequest):
         raise HTTPException(status_code=400,detail="Invalid query request:Contains forbidden Keywords.")
     
     generated_sql=convert_natural_language_to_sql(user_nl_query)
+
     print(generated_sql)
 
     if not generated_sql:
@@ -111,3 +112,7 @@ async def data_requester(request:DataQueryRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500,detail="Internal server error")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
