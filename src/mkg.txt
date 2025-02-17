@@ -1,0 +1,445 @@
+main.py:
+
+"""
+Main entry point for the NL2SQL API using FastAPI.
+
+This module initializes the FastAPI application and defines the `/data-requests`
+endpoint for processing natural language queries.  It orchestrates the conversion
+of NL queries to SQL, executes the SQL against the database, and returns the results
+to the client.
+
+Modules Used:
+    - FastAPI:  For building the API.
+    - Pydantic: For data validation and request/response models.
+    - src.nl2sql_converter:  Handles the conversion of natural language to SQL.
+    - src.query_exe:  Executes SQL queries against the database.
+
+API Endpoints:
+    - POST /data-requests:  Accepts a natural language query, converts it to SQL,
+                             executes the query, and returns the results as a JSON response.
+"""
+import logging
+from fastapi import FastAPI,HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from src.nl2sql_converter import Convert_Natural_Language_To_Sql
+from src.oracle_db_query_exe import Db_Output_Gen
+
+# Configure logging (if not already configured)
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+app=FastAPI()
+
+class NlQueryRequest(BaseModel):
+
+    """
+    Request model for natural language queries.
+
+    Attributes:
+        user_query (str): The natural language query string.
+    """
+    user_query:str
+
+@app.post("/data-requests")
+async def Data_Requester(request:NlQueryRequest):
+
+    """
+    Processes a natural language query, converts it to SQL, and returns the results.
+
+    This endpoint receives a natural language query, validates it, converts it into
+    an SQL query using the `Convert_Natural_Language_To_Sql` function, executes
+    the SQL query against the database using the `Db_Output_Gen` function, and
+    returns the results as a JSON response.
+
+    Args:
+        request (NlQueryRequest):  The incoming request containing the natural language query.
+
+    Returns:
+        JSONResponse:  A JSON response containing the query results or an error message.
+                       - `200 OK`:  Query executed successfully, and results are returned in the `Table_result` field.
+                       - `400 Bad Request`: Invalid query (e.g., empty query, invalid table/column names, forbidden SQL commands). Detail contains specific error information.
+                       - `404 Not Found`: Query executed successfully, but no data was found.
+                       - `500 Internal Server Error`: An unexpected error occurred during processing.
+
+    Raises:
+        HTTPException:
+            - 400 Bad Request: If the query is empty or if SQL generation fails due to invalid input.
+            - 500 Internal Server Error: If an unexpected error occurs during query execution.
+    """
+
+    user_query=request.user_query.strip().lower()
+    if not user_query.strip():
+        raise HTTPException(status_code=400,detail="Query cannot be empty.Please enter a valid query.")
+    
+    generated_sql=Convert_Natural_Language_To_Sql(user_query)
+
+    print(generated_sql)
+
+    if not generated_sql:
+        logger.warning(f"Failed to generate SQL for query: {user_query}")
+        raise HTTPException(status_code=400,detail="Failed to generate SQL Query : Because of you Entered table modification query or tables/fields not present.Please check your request and try again.")
+    
+    logger.info(f"Generated SQL query: {generated_sql}")
+
+    try:
+        query_result=Db_Output_Gen(generated_sql)
+        if query_result:
+            return JSONResponse(content={"Table_result":query_result},status_code=200)
+        else:
+            logger.info(f"No data found for query: {user_query}")
+            return JSONResponse(content={"Message":"No data found"},status_code=404)
+
+    except HTTPException as e:
+        logger.error(f"HTTP Exception: {e.detail}")
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"HTTP error occurred: {e.detail}. Please check your request and try again."
+        )
+    
+    except Exception as e:
+        logger.exception("An unexpected error occurred")
+        raise HTTPException(status_code=500,detail="Internal server error: An unexpected error occurred while processing your request.")
+
+
+nl2sql_converter.py:
+
+"""
+Module for converting Natural Language queries into SQL SELECT statements using Google Gemini AI.
+
+This module leverages the Google Gemini API to translate natural language questions
+into executable SQL SELECT queries.  It uses Langchain for prompt management and
+interaction with the LLM. The module also includes error handling for API key issues
+and SQL generation failures.
+
+Modules Used:
+    - os:  For accessing environment variables (API keys).
+    - dotenv:  For loading environment variables from a .env file.
+    - google.generativeai:  The Google Gemini API client.
+    - langchain:  For prompt engineering and LLM chain management.
+    - fastapi:  For raising HTTP exceptions in case of errors.
+    - src.schema_details:  For retrieving database schema metadata.
+
+Functions:
+    - Convert_Natural_Language_To_Sql: Converts a natural language query into an SQL SELECT statement.
+"""
+
+import os
+import logging
+from dotenv import load_dotenv
+import google.generativeai as Aimodel
+from langchain.prompts import PromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables import RunnablePassthrough,RunnableLambda
+from fastapi import HTTPException
+from src.schema_details import Metadata
+
+load_dotenv()
+
+# Configure logging (if not already configured)
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+API_KEY=os.getenv('API_KEY')
+
+if not API_KEY:
+    logger.error("API_KEY is missing. Set it in the environment variables.")
+    raise HTTPException(status_code=500, detail="API_KEY is missing. Set it in the environment variables.")
+
+Aimodel.configure(api_key=API_KEY)
+def Convert_Natural_Language_To_Sql(user_query:str,params = None) -> str | None:   
+        
+        """
+        Converts a natural language query into a SQL SELECT statement using Google Gemini.
+        
+        This function takes a natural language query as input and uses the Google Gemini API,
+        guided by a carefully crafted prompt, to generate a corresponding SQL SELECT statement.
+        It validates that the generated SQL adheres to specific rules (e.g., SELECT-only,
+        schema adherence) and returns the SQL query string if successful.  If any error
+        occurs during SQL generation or if the generated SQL violates the rules, it returns None.
+
+        Args:
+            user_query (str): The natural language query to be converted.
+            params (dict, optional): Additional parameters (currently unused). Defaults to None.
+
+        Returns:
+            str | None: The generated SQL SELECT statement, or None if generation failed.
+
+        Raises:
+            HTTPException:
+                - 500 Internal Server Error: If the Google Gemini API fails to generate a valid SQL query.
+        """
+
+        schema_details=Metadata()
+
+        prompt_template = f"""
+
+        Convert the following natural language query into a SQL SELECT statement suitable for a database with the following table structure:
+
+        {'\n'.join(schema_details)}
+
+        You are a highly skilled SQL query generation tool designed for enterprise database environments. 
+        Your sole function is to translate natural language requests into valid and efficient SQL SELECT statements. 
+        Adhere strictly to the following rules, and respond ONLY with the generated SQL query.
+        Any deviation from these rules will result in an error.
+
+        **Mandatory Rules:**
+
+        1.  **SELECT-Only Operations:**
+            *   Your output MUST be a valid SQL SELECT statement, and ONLY a SELECT statement.
+            *   Any request implying data modification DML(e.g:INSERT, UPDATE, DELETE), schema alteration DDL(e.g:DROP, ALTER), transaction control TCL(e.g:COMMIT, ROLLBACK), or data control DCL(e.g:GRANT, REVOKE) should result in the immediate response: "ERROR".
+
+        2.  **Schema Adherence & Validation:**
+            *   You MUST ONLY use table and column names that exist within the provided database schema.  Assume the schema is available and correct.
+            *   If a user specifies a table or column that does not exist within this schema, immediately respond with: "ERROR". No exceptions.
+
+        3.  **Explicit Column Specification:**
+            *   If the user explicitly lists the columns to be retrieved, ONLY include those columns in the SELECT statement.
+            *   If the user requests "all columns," "all data," or provides no specific column list, use `SELECT *`.
+
+        4.  **Precise Filtering & Conditions:**
+            *   Translate all WHERE clause conditions precisely as stated.
+            *   Ensure accurate handling of date ranges (using appropriate date/time functions if needed), numerical comparisons, and string matching (using LIKE or other relevant functions as needed).
+
+        5.  **Aggregation and Ordering Implementation:**
+            *   Correctly implement any requested aggregation functions (SUM, COUNT, AVG, MIN, MAX, etc.).
+            *   Implement ORDER BY clauses exactly as requested, including the specified column(s) and sort order (ASC or DESC).  Default to ASC if not specified.
+
+        6.  **LIMIT Clause Enforcement:**
+            *   If the user provides a LIMIT clause, it MUST be included in the generated SQL query.
+
+        7.  **Zero Tolerance for Additional Text:**
+            *   Your output consists SOLELY of the generated SQL SELECT statement. Do NOT include any explanations, comments, or introductory text.  Failure to adhere to this is an error.
+
+        8. **Assume Correct Grammar:**
+            *  Assume that the user input is grammatically correct, though it might contain synonyms or multiple ways to ask the same question.
+
+        **Process:**
+
+        1.  Receive a natural language request.
+        2.  Parse the request to identify:
+            *   The target table(s).
+            *   The desired columns.
+            *   Any filtering conditions (WHERE clause).
+            *   Any aggregation requirements.
+            *   Any sorting requirements (ORDER BY clause).
+            *   Any LIMIT requirements.
+        3.  Construct a valid SQL SELECT statement that fulfills all requirements.
+        4.  Output ONLY the SQL SELECT statement.  If any rule is violated, output "ERROR".
+
+        Now, convert the following Natural Language Query: {user_query}
+        """
+
+        llm = ChatGoogleGenerativeAI(model="gemini-pro", api_key=API_KEY, temperature=0)
+        prompt = PromptTemplate(template=prompt_template,input_variables=["user_query"])
+        try:
+              chain = (
+                    {"user_query":RunnablePassthrough()}
+                    |prompt
+                    |llm
+                    |RunnableLambda(lambda x:x.content)
+              )
+
+              sql_query = chain.invoke(user_query)
+              return sql_query if "ERROR" not in sql_query else None
+        
+        except Exception as e:
+              logger.exception(f"Failed to generate SQL query for user query: {user_query}")
+              raise HTTPException(status_code=500,detail=f"Failed to generate Sql query.")
+        
+
+schema_details.py:
+
+"""
+Module to provide metadata details for the database schema.
+
+This module defines a function, `Metadata`, that returns a list of strings
+describing the database schema.  This metadata is used by the NL-to-SQL
+conversion process to generate valid SQL queries.
+"""
+
+import logging
+from fastapi import HTTPException
+
+# Configure logging (if not already configured)
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+def Metadata() -> list | None:
+
+    """
+    Provides metadata about the database schema.
+
+    Returns:
+        List[str]: A list of strings, where each string describes a table
+                   and its columns. Returns an empty list if no schema
+                   information is available.
+    """
+    try:
+        return [
+            "The database tables to query are student, exam, ACCESS_RING_DATA and placement:"
+            
+            "student table: roll_number INT PRIMARY KEY, sname VARCHAR(30), dept VARCHAR(5), sem INT",
+            "exam table: regno INT PRIMARY KEY, roll_number INT Foreign key, dept VARCHAR(5), mark1 int,mark2,mark3 int,mark4 int,mark5 int,total int,average int,grade varchar(3)",
+            "placement table: placementID INT PRIMARY KEY, roll_number INT, dept char(5), company VARCHAR(100),salary int"
+        ]
+    except Exception as e:
+        logger.error(f"Error getting metadata: {e}")
+        raise HTTPException(status_code=500,detail="There is no schema details")
+
+"""
+A class for managing connections and executing queries on an Oracle database.
+
+This class provides a connection pool for efficient database access and
+handles query execution, error handling, and connection management.
+"""
+
+import os
+import logging
+from dotenv import load_dotenv
+import oracledb
+from fastapi import HTTPException
+load_dotenv()
+
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+class OracleDB:
+    def __init__(self):
+        """
+        Initializes the OracleDB connection pool.
+
+        Sets up a connection pool using environment variables for database credentials
+        and connection details.  Handles potential database connection errors during
+        initialization.
+
+        Raises:
+            HTTPException:
+                - 500 Internal Server Error: If there is an error connecting to the database
+                  or if required environment variables are missing.
+        """
+        self.pool = None  # Initialize pool to None
+        try:
+            #oracledb.init_oracle_client(lib_dir=os.getenv("ORACLE_INSTANT_CLIENT_DIR"))
+            db_user = os.getenv("DB_USER")
+            db_pass = os.getenv("DB_PASS")
+            db_host = os.getenv("DB_HOST")
+            db_port = os.getenv("DB_PORT", "1521")
+            db_service_name = os.getenv("DB_SERVICE_NAME")
+
+            if not all([db_user, db_pass, db_host, db_service_name]):
+                logger.error("Missing required environment variables.")
+                raise ValueError("Missing required environment variables.")
+            
+            # connection pooling parameters
+            min_connections = int(os.getenv("DB_MIN_CONNECTIONS", 2))  # Default to 2
+            max_connections = int(os.getenv("DB_MAX_CONNECTIONS", 5))  # Default to 5
+            connection_increment = int(os.getenv("DB_CONNECTION_INCREMENT", 1)) # Default to 1
+
+            self.pool = oracledb.SessionPool(
+                user=db_user,
+                password=db_pass,
+                dsn=f"{db_host}:{db_port}/{db_service_name}",
+                min=min_connections,
+                max=max_connections,
+                increment=connection_increment,
+                threaded=True,
+                encoding="UTF-8"
+            )
+
+            logger.info("Database connection pool created successfully.")
+
+        except oracledb.DatabaseError as e:
+            logger.error(f"Database connection error: {e}")
+            raise HTTPException(status_code=500, detail=f"Database connection error: {e}")
+
+    def Execute_Query(self, sql_query: str):
+
+        """
+        Executes an SQL query against the Oracle database.
+
+        This function acquires a connection from the connection pool, executes the
+        provided SQL query, and returns the results as a list of dictionaries.
+        Each dictionary represents a row in the result set, with keys corresponding
+        to column names.  The function handles database errors during query execution
+        and ensures that the connection is released back to the pool.
+
+        Args:
+            sql_query (str): The SQL query to execute.
+
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries representing the query results.
+                                  Returns an empty list if the query returns no data.
+
+        Raises:
+            HTTPException:
+                - 400 Bad Request: If there is an error executing the query.
+                - 500 Internal Server Error: If an unexpected error occurs during query execution.
+        """
+
+        connection = None
+        try:
+            connection = self.pool.acquire()
+            with connection.cursor() as cursor:
+                cursor.execute(sql_query)
+                columns = [col[0] for col in cursor.description]
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                if not results:
+                    logger.info(f"Query returned no results: {sql_query}")
+                    return []
+                
+                logger.debug(f"Query executed successfully and returned {len(results)} rows.") #Use debug level for detail logging
+                return results
+        except oracledb.DatabaseError as e:
+            logger.error(f"Database error while executing the query: {e}")
+            raise HTTPException(status_code=400, detail=f"while executing the query: {e}")
+        except Exception as e:
+            logger.exception(f"An unexpected error occurred while executing the query: {sql_query}")
+            raise HTTPException(status_code=500, detail="Internal server error.")
+        finally:
+            # Ensure connection is released back to the pool
+            if connection:
+                try:
+                    connection.close()
+                    logger.info("Database connection released back to pool.")
+                except Exception as e:
+                    logger.error(f"Error releasing database connection: {e}")
+
+    def close_pool(self):
+        """Close the connection pool."""
+        if self.pool:
+            try:
+                self.pool.close()
+                logger.info("Database connection pool closed.")
+            except Exception as e:
+                logger.error(f"Error closing database connection pool: {e}")
+
+Db_Instance = OracleDB()
+
+def Db_Output_Gen(query: str,params=None) ->list[dict]:
+
+    """
+    Executes a SQL query and returns the results.
+
+    This function serves as a wrapper around the `OracleDB.Execute_Query` method,
+    allowing for easier execution of SQL queries.
+
+    Args:
+        query (str): The SQL query to execute.
+        params (dict, optional): Additional parameters (currently unused). Defaults to None.
+
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries representing the query results.
+    """
+    
+    try:
+        return Db_Instance.Execute_Query(query)
+    except Exception as e:
+        logger.exception(f"Error executing query: {query}")
+
+
+

@@ -1,118 +1,101 @@
-import json
-from pydantic import BaseModel
-from src.database import db_output_gen
+"""
+Main entry point for the NL2SQL API using FastAPI.
+
+This module initializes the FastAPI application and defines the `/data-requests`
+endpoint for processing natural language queries.  It orchestrates the conversion
+of NL queries to SQL, executes the SQL against the database, and returns the results
+to the client.
+
+Modules Used:
+    - FastAPI:  For building the API.
+    - Pydantic: For data validation and request/response models.
+    - src.nl2sql_converter:  Handles the conversion of natural language to SQL.
+    - src.query_exe:  Executes SQL queries against the database.
+
+API Endpoints:
+    - POST /data-requests:  Accepts a natural language query, converts it to SQL,
+                             executes the query, and returns the results as a JSON response.
+"""
+import logging
 from fastapi import FastAPI,HTTPException
-from src.nl2sql import convert_natural_language_to_sql
 from fastapi.responses import JSONResponse
-from src.words import forbidden_keywords
-from src.config import get_db_config
-from src.fetch_details_scehma import QueryRequest,fetch_table_details
-get_db_config()
+from pydantic import BaseModel
+from src.nl2sql_converter import Convert_Natural_Language_To_Sql
+from src.oracle_db_query_exe import Db_Output_Gen
 
-''' FastApi Application instance '''
-app=FastAPI(title="NL2SQL API",
-    description="An API that converts natural language queries to SQL and retrieves data from a database.",
-    version="1.0.0",
-    contact={
-        "name": "company name",
-        "email": "company@example.com",
-    },
-    license_info={
-        "name": "MIT License",
-        "url": "https://opensource.org/licenses/MIT",
-    })
+# Configure logging (if not already configured)
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-class DataQueryRequest(BaseModel):
+app=FastAPI()
+
+class NlQueryRequest(BaseModel):
 
     """
-    Represents the request body for the /data-requests/ endpoint.
+    Request model for natural language queries.
 
     Attributes:
-        user_query (str): The natural language query to be converted to SQL.
-    
-    This class ensures that incoming data is structured correctly for processing.
+        user_query (str): The natural language query string.
     """
     user_query:str
 
-
-@app.post("/details",response_model=dict, summary="Fetch Table Details", tags=["Database"])
-async def fetch(req:QueryRequest):
-    """
-    Fetches fetch_table_details names and their column details from the database. 
-
-    Request Body:
-    - query (str): The SQL query to retrieve fetch_table_details names. (Only 'SHOW TABLES' queries are allowed.)
-
-    Responses:
-    - Returns a dictionary containing fetch_table_details names and their columns.
-    - If the query is empty or invalid.
-    - If a database error occurs.
-    """
-    user_req_table=req.get_table.strip().lower()
-    if not user_req_table:
-        raise HTTPException(status_code=400,detail="Query cannot be empty")
-    
-    if user_req_table =="show tables":
-        result = fetch_table_details(user_req_table)
-        return JSONResponse(content=result, status_code=200)
-    
-    raise HTTPException(status_code=400,detail={"Please follow the format : ' show tables ' your entered wrong format" : user_req_table})
-    
-
-
-
-@app.post("/data-requests",summary="Convert Natural Language Query to SQL",
-    description="This endpoint takes a natural language query and converts it to a corresponding SQL query. The SQL query is then executed against the database, and the results are returned in a JSON format. If the query is invalid or contains forbidden keywords, an error is returned.",
-    tags=["Data Requests"],)
-
-async def data_requester(request:DataQueryRequest):
+@app.post("/data-requests")
+async def Data_Requester(request:NlQueryRequest):
 
     """
-    Handles the request to convert a natural language query to SQL and retrieve data.
+    Processes a natural language query, converts it to SQL, and returns the results.
+
+    This endpoint receives a natural language query, validates it, converts it into
+    an SQL query using the `Convert_Natural_Language_To_Sql` function, executes
+    the SQL query against the database using the `Db_Output_Gen` function, and
+    returns the results as a JSON response.
 
     Args:
-        request (DataQueryRequest): The request object containing the natural language query.
-    
-    This function does the following:
-    - Validates the user_req_table input.
-    - Converts the natural language query to a corresponding SQL query.
-    - Executes the SQL query against the database.
-    - Returns the results or an error message in JSON format.
+        request (NlQueryRequest):  The incoming request containing the natural language query.
 
     Returns:
-        JSONResponse: A JSON response containing the query results or an error message.
-    
+        JSONResponse:  A JSON response containing the query results or an error message.
+                       - `200 OK`:  Query executed successfully, and results are returned in the `Table_result` field.
+                       - `400 Bad Request`: Invalid query (e.g., empty query, invalid table/column names, forbidden SQL commands). Detail contains specific error information.
+                       - `404 Not Found`: Query executed successfully, but no data was found.
+                       - `500 Internal Server Error`: An unexpected error occurred during processing.
+
     Raises:
         HTTPException:
-            - 400: If the input query is invalid (empty or contains forbidden keywords) or if SQL generation fails.
-            - 500: If there is an error decoding the database result to JSON.
+            - 400 Bad Request: If the query is empty or if SQL generation fails due to invalid input.
+            - 500 Internal Server Error: If an unexpected error occurs during query execution.
     """
-    user_nl_query=request.user_query.strip().lower()
-    if not user_nl_query.strip():
+
+    user_query=request.user_query.strip().lower()
+    if not user_query.strip():
         raise HTTPException(status_code=400,detail="Query cannot be empty.Please enter a valid query.")
     
-    if any(keyword in user_nl_query for keyword in forbidden_keywords):
-        raise HTTPException(status_code=400,detail="Invalid query request:Contains forbidden Keywords.")
-    
-    generated_sql=convert_natural_language_to_sql(user_nl_query)
+    generated_sql=Convert_Natural_Language_To_Sql(user_query)
 
     print(generated_sql)
 
     if not generated_sql:
-        raise HTTPException(status_code=400,detail="Failed to generate SQL Query.")
+        logger.warning(f"Failed to generate SQL for query: {user_query}")
+        raise HTTPException(status_code=400,detail="Failed to generate SQL Query : Because of you Entered table modification query or tables/fields not present.Please check your request and try again.")
+    
+    logger.info(f"Generated SQL query: {generated_sql}")
 
     try:
-        query_result=db_output_gen(generated_sql)
+        query_result=Db_Output_Gen(generated_sql)
         if query_result:
             return JSONResponse(content={"Table_result":query_result},status_code=200)
         else:
+            logger.info(f"No data found for query: {user_query}")
             return JSONResponse(content={"Message":"No data found"},status_code=404)
+
     except HTTPException as e:
-        raise e
-
+        logger.error(f"HTTP Exception: {e.detail}")
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"HTTP error occurred: {e.detail}. Please check your request and try again."
+        )
+    
     except Exception as e:
-        raise HTTPException(status_code=500,detail="Internal server error")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        logger.exception("An unexpected error occurred")
+        raise HTTPException(status_code=500,detail="Internal server error: An unexpected error occurred while processing your request.")
