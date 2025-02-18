@@ -8,13 +8,11 @@ conversion process to generate valid SQL queries.
 
 import logging
 from fastapi import HTTPException
+from src.utils.logger import get_logger
 
-# Configure logging (if not already configured)
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger=get_logger(__name__)
 
-def Metadata() -> list | None:
+def get_metadata() -> list | None:
 
     """
     Provides metadata about the database schema.
@@ -33,5 +31,5 @@ def Metadata() -> list | None:
             "placement table: placementID INT PRIMARY KEY, roll_number INT, dept char(5), company VARCHAR(100),salary int"
         ]
     except Exception as e:
-        logger.error(f"Error getting metadata: {e}")
-        raise HTTPException(status_code=500,detail="There is no schema details")
+        logger.error(f"Error retrieving metadata: {e}")
+        raise HTTPException(status_code=500, detail="Schema metadata retrieval failed.")

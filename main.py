@@ -16,19 +16,25 @@ API Endpoints:
     - POST /data-requests:  Accepts a natural language query, converts it to SQL,
                              executes the query, and returns the results as a JSON response.
 """
-import logging
-from fastapi import FastAPI,HTTPException
+
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from src.nl2sql_converter import Convert_Natural_Language_To_Sql
-from src.oracle_db_query_exe import Db_Output_Gen
+from src.query_executer import db_instance,Db_Output_Gen
+from src.utils.logger import get_logger
+from contextlib import asynccontextmanager
 
-# Configure logging (if not already configured)
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger=get_logger(__name__)
 
-app=FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    db_instance.close_pool
+    logger.info("Shutdown complete, connection pool closed.")
+
+app=FastAPI(lifespan=lifespan)
 
 class NlQueryRequest(BaseModel):
 
@@ -41,7 +47,7 @@ class NlQueryRequest(BaseModel):
     user_query:str
 
 @app.post("/data-requests")
-async def Data_Requester(request:NlQueryRequest):
+async def process_request(request:NlQueryRequest):
 
     """
     Processes a natural language query, converts it to SQL, and returns the results.
@@ -68,16 +74,16 @@ async def Data_Requester(request:NlQueryRequest):
     """
 
     user_query=request.user_query.strip().lower()
-    if not user_query.strip():
+    
+    if not user_query:
+        logger.warning("Received an empty query request.")
         raise HTTPException(status_code=400,detail="Query cannot be empty.Please enter a valid query.")
     
     generated_sql=Convert_Natural_Language_To_Sql(user_query)
 
-    print(generated_sql)
-
     if not generated_sql:
         logger.warning(f"Failed to generate SQL for query: {user_query}")
-        raise HTTPException(status_code=400,detail="Failed to generate SQL Query : Because of you Entered table modification query or tables/fields not present.Please check your request and try again.")
+        raise HTTPException(status_code=400,detail="Invalid SQL query or unauthorized modifications detected.")
     
     logger.info(f"Generated SQL query: {generated_sql}")
 
@@ -86,7 +92,6 @@ async def Data_Requester(request:NlQueryRequest):
         if query_result:
             return JSONResponse(content={"Table_result":query_result},status_code=200)
         else:
-            logger.info(f"No data found for query: {user_query}")
             return JSONResponse(content={"Message":"No data found"},status_code=404)
 
     except HTTPException as e:
@@ -95,7 +100,10 @@ async def Data_Requester(request:NlQueryRequest):
             status_code=e.status_code,
             detail=f"HTTP error occurred: {e.detail}. Please check your request and try again."
         )
-    
     except Exception as e:
-        logger.exception("An unexpected error occurred")
+        logger.exception("Unexpected error during query execution.")
         raise HTTPException(status_code=500,detail="Internal server error: An unexpected error occurred while processing your request.")
+
+def shutdown():
+    db_instance.close_pool()
+    logger.info("Shutdown complete, connection pool closed.")

@@ -19,29 +19,30 @@ Functions:
 """
 
 import os
-import logging
 from dotenv import load_dotenv
 import google.generativeai as Aimodel
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.runnables import RunnablePassthrough,RunnableLambda
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from fastapi import HTTPException
-from src.schema_details import Metadata
+from src.schema_details import get_metadata
+from src.utils.logger import get_logger
 
+# Load environment variables
 load_dotenv()
 
-# Configure logging (if not already configured)
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+# Initialize logger
+logger = get_logger(__name__)
 
-API_KEY=os.getenv('API_KEY')
+# Load API Key
+API_KEY = os.getenv('API_KEY')
 
 if not API_KEY:
-    logger.error("API_KEY is missing. Set it in the environment variables.")
+    logger.error("Missing API_KEY in environment variables.")
     raise HTTPException(status_code=500, detail="API_KEY is missing. Set it in the environment variables.")
 
 Aimodel.configure(api_key=API_KEY)
+
 def Convert_Natural_Language_To_Sql(user_query:str,params = None) -> str | None:   
         
         """
@@ -65,7 +66,10 @@ def Convert_Natural_Language_To_Sql(user_query:str,params = None) -> str | None:
                 - 500 Internal Server Error: If the Google Gemini API fails to generate a valid SQL query.
         """
 
-        schema_details=Metadata()
+        schema_details=get_metadata()
+        if not schema_details:
+            logger.error("Schema metadata retrieval failed.")
+            raise HTTPException(status_code=500, detail="Schema metadata unavailable.")
 
         prompt_template = f"""
 
@@ -139,6 +143,6 @@ def Convert_Natural_Language_To_Sql(user_query:str,params = None) -> str | None:
               return sql_query if "ERROR" not in sql_query else None
         
         except Exception as e:
-              logger.exception(f"Failed to generate SQL query for user query: {user_query}")
-              raise HTTPException(status_code=500,detail=f"Failed to generate Sql query.")
+            logger.exception(f"SQL generation failed for query: {user_query}")
+            raise HTTPException(status_code=500, detail="SQL generation failed.")
         

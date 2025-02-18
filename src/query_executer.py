@@ -5,16 +5,12 @@ This class provides a connection pool for efficient database access and
 handles query execution, error handling, and connection management.
 """
 
-import os
-import logging
-from dotenv import load_dotenv
+from src.utils.config import settings
 import oracledb
 from fastapi import HTTPException
-load_dotenv()
+from src.utils.logger import get_logger
 
-if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger=get_logger(__name__)
 
 class OracleDB:
     def __init__(self):
@@ -30,40 +26,24 @@ class OracleDB:
                 - 500 Internal Server Error: If there is an error connecting to the database
                   or if required environment variables are missing.
         """
-        self.pool = None  # Initialize pool to None
+        self.pool = None
         try:
-            #oracledb.init_oracle_client(lib_dir=os.getenv("ORACLE_INSTANT_CLIENT_DIR"))
-            db_user = os.getenv("DB_USER")
-            db_pass = os.getenv("DB_PASS")
-            db_host = os.getenv("DB_HOST")
-            db_port = os.getenv("DB_PORT", "1521")
-            db_service_name = os.getenv("DB_SERVICE_NAME")
-
-            if not all([db_user, db_pass, db_host, db_service_name]):
-                logger.error("Missing required environment variables.")
-                raise ValueError("Missing required environment variables.")
-            
-            # connection pooling parameters
-            min_connections = int(os.getenv("DB_MIN_CONNECTIONS", 2))  # Default to 2
-            max_connections = int(os.getenv("DB_MAX_CONNECTIONS", 5))  # Default to 5
-            connection_increment = int(os.getenv("DB_CONNECTION_INCREMENT", 1)) # Default to 1
-
             self.pool = oracledb.SessionPool(
-                user=db_user,
-                password=db_pass,
-                dsn=f"{db_host}:{db_port}/{db_service_name}",
-                min=min_connections,
-                max=max_connections,
-                increment=connection_increment,
-                threaded=True,
-                encoding="UTF-8"
+                user = settings.DB_USER,
+                password = settings.DB_PASS,
+                dsn = f"{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_SERVICE_NAME}",
+                min = settings.DB_MIN_CONNECTIONS,
+                max = settings.DB_MAX_CONNECTIONS,
+                increment = settings.DB_CONNECTION_INCREMENT,
+                threaded = True,
+                encoding = "UTF-8"
             )
 
-            logger.info("Database connection pool created successfully.")
+            logger.info("Database connection pool initialized successfully.")
 
         except oracledb.DatabaseError as e:
             logger.error(f"Database connection error: {e}")
-            raise HTTPException(status_code=500, detail=f"Database connection error: {e}")
+            raise HTTPException(status_code=500, detail=f"Unable to establish database connection.")
 
     def Execute_Query(self, sql_query: str):
 
@@ -96,37 +76,38 @@ class OracleDB:
                 cursor.execute(sql_query)
                 columns = [col[0] for col in cursor.description]
                 results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
                 if not results:
                     logger.info(f"Query returned no results: {sql_query}")
                     return []
                 
-                logger.debug(f"Query executed successfully and returned {len(results)} rows.") #Use debug level for detail logging
+                logger.debug(f"Query executed successfully and returned {len(results)} rows.")
                 return results
+            
         except oracledb.DatabaseError as e:
-            logger.error(f"Database error while executing the query: {e}")
-            raise HTTPException(status_code=400, detail=f"while executing the query: {e}")
+            logger.error(f"Database error during query execution: {e}")
+            raise HTTPException(status_code=400, detail=f"Error executing the query")
+        
         except Exception as e:
-            logger.exception(f"An unexpected error occurred while executing the query: {sql_query}")
-            raise HTTPException(status_code=500, detail="Internal server error.")
+            logger.exception(f"Unexpected error while executing query: {sql_query}")
+            raise HTTPException(status_code=500, detail="Internal server errorduring query execution.")
+        
         finally:
-            # Ensure connection is released back to the pool
             if connection:
-                try:
-                    connection.close()
-                    logger.info("Database connection released back to pool.")
-                except Exception as e:
-                    logger.error(f"Error releasing database connection: {e}")
+                connection.close()
+                logger.info("Database connection released back to pool.")
 
     def close_pool(self):
-        """Close the connection pool."""
+        """
+        Closes the OracleDB connection pool.
+        
+        Ensures that all database connections are properly closed and releases resources.
+        """
         if self.pool:
-            try:
-                self.pool.close()
-                logger.info("Database connection pool closed.")
-            except Exception as e:
-                logger.error(f"Error closing database connection pool: {e}")
+            self.pool.close()
+            logger.info("Database connection pool closed.")
 
-Db_Instance = OracleDB()
+db_instance = OracleDB()
 
 def Db_Output_Gen(query: str,params=None) ->list[dict]:
 
@@ -144,7 +125,4 @@ def Db_Output_Gen(query: str,params=None) ->list[dict]:
         List[Dict[str, Any]]: A list of dictionaries representing the query results.
     """
     
-    try:
-        return Db_Instance.Execute_Query(query)
-    except Exception as e:
-        logger.exception(f"Error executing query: {query}")
+    return db_instance.Execute_Query(query)
